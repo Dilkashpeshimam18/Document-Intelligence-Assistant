@@ -1,194 +1,187 @@
+
 from ingestion.document_loader import DocumentIngestion
 from ingestion.document_cleaner import DocumentCleaner
 from ingestion.metadata_extractor import MetadataExtractor
-from chunking.text_splitter import (FixedSizedChunker, RecursiveChunker, TokenBasedChunker) 
-from chunking.semantic_chunker import SemanticChunkerService
-from chunking.parent_child_chunker import ParentChildChunker
-from chunking.chunking_evaluator import ChunkingEvaluator
+
+from chunking.text_splitter import RecursiveChunker
+
 from embedding.embedding_model import EmbeddingModel
+
 from vectorstore.chroma_store import ChromaVectorStore
 
-ingestion=DocumentIngestion(
-    data_path='data/raw'
-)
+from retrieval.retriever import DocumentRetriever
+from retrieval.bm25_retriever import BM25DocumentRetriever
+from retrieval.hybrid_search import HybridRetriever
+from retrieval.reranker import CrossEncoderReranker
 
-chunker=FixedSizedChunker(
-    chunk_size=500,
-    chunk_overlap=50
-)
+def main():
 
-recursive_chunker = RecursiveChunker(
-    chunk_size=500,
-    chunk_overlap=50
-)
+    # ==========================================
+    # 1. DOCUMENT INGESTION
+    # ==========================================
 
-# Initialize embedding service
-embedding_service = EmbeddingModel()
-
-# Initialize ChromaDB
-vector_db = ChromaVectorStore(
-    embedding_model=embedding_service.model,
-    persist_directory="./data/chroma_db",
-    collection_name="document_intelligence"
-)
-
-evaluator = ChunkingEvaluator()
-
-documents=ingestion.load_all_documents()
-
-print("Total document pages/files:", len(documents))
-
-cleaner= DocumentCleaner()
-
-cleanedDocument=cleaner.clean_documents(
-    documents
-)
-
-print("Cleaned documents:", len(cleanedDocument))
-
-extractor=MetadataExtractor()
-
-processed_documents=extractor.extract_metadata(
-    cleanedDocument
-)
-
-chunks=chunker.split_documents(processed_documents)
-print("Processed documents:", len(processed_documents))
-
-print("\n========== CHUNKING RESULTS ==========")
-
-print("Original documents:", len(processed_documents))
-print("Generated chunks:", len(chunks))
-
-recursive_chunks = recursive_chunker.split_documents(
-    processed_documents
-)
-
-print("\n========== RECURSIVE CHUNKING RESULTS ==========")
-
-print("Original documents:", len(processed_documents))
-
-print("Generated chunks:", len(recursive_chunks))
-
-
-# Display sample chunks
-for i, chunk in enumerate(chunks[:3]):
-
-    print(f"\n========== CHUNK {i + 1} ==========")
-
-    print("Content:")
-    print(chunk.page_content)
-
-    print("\nMetadata:")
-    print(chunk.metadata)
-
-    print("Character count:", len(chunk.page_content))
-
-
-
-# STEP: Token-Based Chunking
-
-token_chunker = TokenBasedChunker(
-    chunk_size=300,
-    chunk_overlap=30,
-    encoding_name="cl100k_base"
-)
-
-token_chunks = token_chunker.split_documents(
-    processed_documents
-)
-
-print("\n========== TOKEN CHUNKING RESULTS ==========")
-
-print("Original documents:", len(processed_documents))
-
-print("Generated token chunks:", len(token_chunks))
-
-
-# Display sample chunks
-
-for i, chunk in enumerate(token_chunks[:3]):
-
-    print(f"\n========== TOKEN CHUNK {i + 1} ==========")
-
-    print("Content:")
-    print(chunk.page_content)
-
-    print("\nMetadata:")
-    print(chunk.metadata)
-
-semantic_chunker = SemanticChunkerService()
-
-semantic_chunks = semantic_chunker.split_documents(documents)
-
-print("\n--- Semantic Chunking ---")
-print("Total semantic chunks:", len(semantic_chunks))
-
-for i, chunk in enumerate(semantic_chunks[:3]):
-    print(f"\nChunk {i + 1}:")
-    print(chunk.page_content[:500])
-    print("Metadata:", chunk.metadata)
-
-
-parent_child_chunker = ParentChildChunker(
-    parent_chunk_size=2000,
-    parent_chunk_overlap=200,
-    child_chunk_size=400,
-    child_chunk_overlap=50
-)
-
-# Replace documents with your metadata-enriched document variable
-result = parent_child_chunker.split_documents(documents)
-
-parents = result["parents"]
-children = result["children"]
-parent_store = result["parent_store"]
-
-print("\n--- Parent-Child Chunking ---")
-print("Total parent chunks:", len(parents))
-print("Total child chunks:", len(children))
-
-if children:
-    print("\nSample child:")
-    print(children[0].page_content[:300])
-    print("Parent ID:", children[0].metadata["parent_id"])
-
-    retrieved_parents = parent_child_chunker.retrieve_parents(
-        [children[0]],
-        parent_store
+    ingestion = DocumentIngestion(
+        data_path="data/raw"
     )
 
-    print("\nRetrieved parent:")
-    print(retrieved_parents[0].page_content[:500])
+    documents = ingestion.load_all_documents()
 
-# Evaluate each strategy
-results = [
-    evaluator.evaluate(chunks, "Fixed-size"),
-    evaluator.evaluate(recursive_chunks, "Recursive"),
-    evaluator.evaluate(token_chunks, "Token-based")
-]
+    print("\n========== DOCUMENT INGESTION ==========")
+    print("Loaded documents:", len(documents))
 
-evaluator.compare(results)
+    if not documents:
+        print("No documents found. Add PDF, TXT or DOCX files to data/raw.")
+        return
+
+    # ==========================================
+    # 2. DOCUMENT CLEANING
+    # ==========================================
+
+    cleaner = DocumentCleaner()
+
+    cleaned_documents = cleaner.clean_documents(
+        documents
+    )
+
+    print("\n========== DOCUMENT CLEANING ==========")
+    print("Cleaned documents:", len(cleaned_documents))
+
+    # ==========================================
+    # 3. METADATA EXTRACTION
+    # ==========================================
+
+    extractor = MetadataExtractor()
+
+    processed_documents = extractor.extract_metadata(
+        cleaned_documents
+    )
+
+    print("\n========== METADATA EXTRACTION ==========")
+    print("Processed documents:", len(processed_documents))
+
+    # ==========================================
+    # 4. DOCUMENT CHUNKING
+    # ==========================================
+
+    chunker = RecursiveChunker(
+        chunk_size=500,
+        chunk_overlap=50
+    )
+
+    chunks = chunker.split_documents(
+        processed_documents
+    )
+
+    print("\n========== CHUNKING ==========")
+    print("Generated chunks:", len(chunks))
+
+    if not chunks:
+        print("No chunks generated.")
+        return
+
+    # ==========================================
+    # 5. EMBEDDING MODEL
+    # ==========================================
+
+    embedding_service = EmbeddingModel()
+
+    print("\n========== EMBEDDING MODEL ==========")
+    print("Embedding model initialized.")
+
+    # ==========================================
+    # 6. CHROMADB INITIALIZATION
+    # ==========================================
+
+    vector_db = ChromaVectorStore(
+        embedding_model=embedding_service.model,
+        persist_directory="./data/chroma_db",
+        collection_name="document_intelligence"
+    )
+
+    # ==========================================
+    # 7. VECTOR INDEXING
+    # ==========================================
+
+    ids = vector_db.add_documents(chunks)
+
+    print("\n========== VECTOR DATABASE ==========")
+    print("Indexed chunks:", len(ids))
+
+    # ==========================================
+    # 8. BM25 RETRIEVAL
+    # ==========================================
+
+    bm25_retriever = BM25DocumentRetriever(
+        documents=chunks,
+        k=4
+    )
+
+    # ==========================================
+    # 9. HYBRID RETRIEVAL
+    # ==========================================
+
+    document_retriever = DocumentRetriever(
+        vector_store=vector_db
+    )
+
+    hybrid_retriever = HybridRetriever(
+        vector_retriever=document_retriever,
+        bm25_retriever=bm25_retriever,
+        rrf_constant=60
+    )
+
+    # ==========================================
+    # 10. TEST RETRIEVAL
+    # ==========================================
+
+    
+
+    # ==========================================
+    # 10. HYBRID RETRIEVAL
+    # ==========================================
+
+    query = "How does supervised learning train a model?"
+
+    hybrid_results = hybrid_retriever.retrieve(
+        query=query,
+        k=10
+    )
+
+    print("\n========== HYBRID SEARCH RESULTS ==========")
+
+    for index, result in enumerate(hybrid_results):
+
+        print(f"\nResult {index + 1}")
+        print("RRF Score:", result["rrf_score"])
+        print("Content:", result["document"].page_content[:250])
+
+    # ==========================================
+    # 11. CROSS-ENCODER RERANKING
+    # ==========================================
+
+    reranker = CrossEncoderReranker(
+        model_name="cross-encoder/ms-marco-MiniLM-L-6-v2",
+        device="cpu"
+    )
+
+    reranked_results = reranker.rerank(
+        query=query,
+        retrieved_results=hybrid_results,
+        top_n=4
+    )
+
+    print("\n========== RERANKED RESULTS ==========")
+
+    for index, result in enumerate(reranked_results):
+
+        document = result["document"]
+
+        print(f"\nResult {index + 1}")
+        print("RRF Score:", result["rrf_score"])
+        print("Reranker Score:", result["rerank_score"])
+        print("Content:", document.page_content[:300])
+        print("Metadata:", document.metadata)
 
 
-# Index our document chunks
-ids = vector_db.add_documents(recursive_chunks)
-
-print("\n--- ChromaDB Indexing ---")
-print("Indexed chunks:", len(ids))
-
-# Search using a natural-language question
-query = "What is machine learning?"
-
-results = vector_db.similarity_search(
-    query=query,
-    k=4
-)
-
-print("\n--- Retrieved Documents ---")
-
-for i, document in enumerate(results):
-
-    print(f"\nResult {i + 1}:")
-    print(document.page_content[:500])
-    print("Metadata:", document.metadata)
+if __name__ == "__main__":
+    main()
